@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  security-and-lint:
+    name: Security & Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify no tracked secret files
+        run: |
+          echo "Checking for committed secret files..."
+          FORBIDDEN_FILES=$(git ls-files | grep -E "(\.env$|\.key$|\.pem$|credentials\.json|service-account.*\.json)" || true)
+          if [ -n "$FORBIDDEN_FILES" ]; then
+            echo "ERROR: The following forbidden files are tracked in git:"
+            echo "$FORBIDDEN_FILES"
+            exit 1
+          fi
+          echo "✓ No secret files tracked."
+
+      - name: Scan repository for leaked tokens or credentials
+        run: |
+          echo "Scanning for hardcoded tokens..."
+          # Scan for real GitHub PAT prefix ghp_ followed by 36 alphanumeric chars (ignoring dummy test patterns)
+          SUSPICIOUS=$(git grep -EI "ghp_[A-Za-z0-9]{36}" | grep -v "mocktesttoken" | grep -v "yourPersonalAccessTokenHere" || true)
+          if [ -n "$SUSPICIOUS" ]; then
+            echo "ERROR: Potential real GitHub token detected in code:"
+            echo "$SUSPICIOUS"
+            exit 1
+          fi
+          echo "✓ No real tokens detected."
+
+      - name: Shell syntax check (bash -n)
+        run: |
+          bash -n scripts/setup-mcp.sh
+          bash -n tests/test-linux.sh
+          echo "✓ Shell syntax valid."
+
+  test-linux:
+    name: Test on Linux (Ubuntu)
+    needs: security-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run Linux Test Suite
+        run: |
+          chmod +x scripts/setup-mcp.sh tests/test-linux.sh
+          ./tests/test-linux.sh
+
+      - name: Test Flag Combinations
+        run: |
+          # Test skipping GitHub
+          ./scripts/setup-mcp.sh --skip-github --config /tmp/skip-gh.json --test
+          # Test skipping GCloud
+          ./scripts/setup-mcp.sh --skip-gcloud --token "ghp_mocktesttoken000000000000000000000000" --config /tmp/skip-gcloud.json
+          echo "✓ Flag combinations tested successfully."
+
+  test-windows:
+    name: Test on Windows
+    needs: security-and-lint
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run Windows Test Suite (PowerShell)
+        shell: pwsh
+        run: |
+          ./tests/test-windows.ps1
+
+      - name: Test Flag Combinations on Windows
+        shell: pwsh
+        run: |
+          $tempDir = [System.IO.Path]::GetTempPath()
+          # Test skipping GitHub
+          & ./scripts/setup-mcp.ps1 -SkipGitHub -ConfigPath "$tempDir\skip-gh.json" -Test
+          # Test skipping GCloud
+          & ./scripts/setup-mcp.ps1 -SkipGCloud -GitHubToken "ghp_mocktesttoken000000000000000000000000" -ConfigPath "$tempDir\skip-gcloud.json"
+          Write-Host "✓ Windows flag combinations tested successfully."

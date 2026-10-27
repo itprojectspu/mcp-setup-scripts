@@ -1,0 +1,39 @@
+# Environment and Secret files
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+credentials.json
+service-account*.json
+client_secret*.json
+*.token
+*token*.txt
+
+# MCP Configuration files containing active secrets
+mcp_config.json
+!templates/mcp_config.template.json
+
+# Logs and runtime artifacts
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Temp and test artifacts
+tmp/
+temp/
+tests/output/
+*.tmp
+
+# Binaries and local installs
+bin/
+downloads/
+node_modules/
