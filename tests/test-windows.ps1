@@ -6,7 +6,8 @@ $ErrorActionPreference = "Stop"
 
 Write-Host ">>> Running Windows MCP setup test suite..." -ForegroundColor Cyan
 
-$tempBase = Join-Path ([System.IO.Path]::GetTempPath()) "mcp-test-$([System.Guid]::NewGuid().ToString('N'))"
+$guidStr = [System.Guid]::NewGuid().ToString("N")
+$tempBase = Join-Path ([System.IO.Path]::GetTempPath()) "mcp-test-$guidStr"
 $testConfig = Join-Path $tempBase "mcp_config.json"
 $testBin = Join-Path $tempBase "bin"
 

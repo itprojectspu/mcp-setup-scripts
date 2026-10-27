@@ -95,8 +95,9 @@ if (-not $SkipGitHub) {
     if (-not (Test-Path $binPath) -or $Test) {
         $downloadUrl = "https://github.com/github/github-mcp-server/releases/latest/download/github-mcp-server_Windows_${arch}.zip"
         Write-Host "    Downloading github-mcp-server binary from official releases..." -ForegroundColor Gray
-        $zipTemp = Join-Path ([System.IO.Path]::GetTempPath()) "github-mcp-$([System.Guid]::NewGuid().ToString('N')).zip"
-        $extractTemp = Join-Path ([System.IO.Path]::GetTempPath()) "github-mcp-extract-$([System.Guid]::NewGuid().ToString('N'))"
+        $guidStr = [System.Guid]::NewGuid().ToString("N")
+        $zipTemp = Join-Path ([System.IO.Path]::GetTempPath()) "github-mcp-$guidStr.zip"
+        $extractTemp = Join-Path ([System.IO.Path]::GetTempPath()) "github-mcp-extract-$guidStr"
 
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -106,7 +107,7 @@ if (-not $SkipGitHub) {
             $extractedExe = Get-ChildItem -Path $extractTemp -Filter "github-mcp-server.exe" -Recurse | Select-Object -First 1
             if ($extractedExe) {
                 Move-Item -Path $extractedExe.FullName -Destination $binPath -Force
-                Write-Host "    ✓ Installed github-mcp-server to $binPath" -ForegroundColor Green
+                Write-Host "    [OK] Installed github-mcp-server to $binPath" -ForegroundColor Green
             } else {
                 Write-Warning "    Could not find github-mcp-server.exe in extracted archive."
             }
@@ -119,7 +120,7 @@ if (-not $SkipGitHub) {
             if (Test-Path $extractTemp) { Remove-Item -Path $extractTemp -Recurse -Force -ErrorAction SilentlyContinue }
         }
     } else {
-        Write-Host "    ✓ github-mcp-server binary already exists at $binPath" -ForegroundColor Green
+        Write-Host "    [OK] github-mcp-server binary already exists at $binPath" -ForegroundColor Green
     }
 
     # Ensure $InstallDir is in PATH for current process
@@ -139,7 +140,7 @@ if (-not $SkipGCloud) {
         Write-Warning "    Node.js is not detected in PATH. Node >= 20 is required for @google-cloud/gcloud-mcp."
     } else {
         $nodeVer = & node -v
-        Write-Host "    ✓ Node.js detected: $nodeVer" -ForegroundColor Green
+        Write-Host "    [OK] Node.js detected: $nodeVer" -ForegroundColor Green
     }
 
     $gcloudCmd = Get-Command gcloud -ErrorAction SilentlyContinue
@@ -147,11 +148,17 @@ if (-not $SkipGCloud) {
         Write-Warning "    gcloud CLI is not detected in PATH. Install Google Cloud SDK for Windows: https://cloud.google.com/sdk/docs/install"
     } else {
         $gcloudVer = (& gcloud --version 2>&1 | Select-Object -First 1)
-        Write-Host "    ✓ Google Cloud SDK detected: $gcloudVer" -ForegroundColor Green
+        Write-Host "    [OK] Google Cloud SDK detected: $gcloudVer" -ForegroundColor Green
 
-        $activeAccount = (& gcloud config get-value account 2>$null)
+        $activeAccount = $null
+        try {
+            $activeAccount = (& gcloud config get-value account 2>$null)
+        } catch {
+            $activeAccount = $null
+        }
+
         if ($activeAccount -and $activeAccount -ne "(unset)") {
-            Write-Host "    ✓ Active gcloud account: $activeAccount" -ForegroundColor Green
+            Write-Host "    [OK] Active gcloud account: $activeAccount" -ForegroundColor Green
         } else {
             Write-Host "    [Notice] No active account logged in. Run 'gcloud auth login' to authenticate." -ForegroundColor Cyan
         }
@@ -202,7 +209,7 @@ if (-not $SkipGCloud) {
 $jsonOutput = $configData | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($ConfigPath, $jsonOutput + [System.Environment]::NewLine, [System.Text.Encoding]::UTF8)
 
-Write-Host "    ✓ Configuration saved successfully." -ForegroundColor Green
+Write-Host "    [OK] Configuration saved successfully." -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " Setup complete! " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
