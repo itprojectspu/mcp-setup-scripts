@@ -10,6 +10,10 @@ set -euo pipefail
 CONFIG_PATH="${HOME}/.gemini/config/mcp_config.json"
 BIN_DIR="${HOME}/.local/bin"
 GITHUB_TOKEN="${GITHUB_PERSONAL_ACCESS_TOKEN:-${GITHUB_TOKEN:-}}"
+GCLOUD_ACCOUNT="${GCLOUD_ACCOUNT:-}"
+GCLOUD_PROJECT="${GCLOUD_PROJECT:-}"
+INSTALL_DEPS=false
+LOGIN_GCLOUD=false
 SKIP_GCLOUD=false
 SKIP_GITHUB=false
 IS_TEST=false
@@ -21,13 +25,17 @@ Usage: $(basename "$0") [OPTIONS]
 Configures GitHub MCP Server and Google Cloud MCP Server.
 
 Options:
-  -t, --token <TOKEN>      GitHub Personal Access Token (or set GITHUB_TOKEN / GITHUB_PERSONAL_ACCESS_TOKEN)
-  -c, --config <PATH>      Target mcp_config.json path (default: ~/.gemini/config/mcp_config.json)
-  -b, --bin-dir <DIR>      Directory to install binaries (default: ~/.local/bin)
-      --skip-gcloud        Skip Google Cloud MCP setup
-      --skip-github        Skip GitHub MCP setup
-      --test               Run in CI / Test mode (uses mock token if none provided)
-  -h, --help               Show this help message
+  -t, --token <TOKEN>          GitHub Personal Access Token (or GITHUB_TOKEN env var)
+  -c, --config <PATH>          Target mcp_config.json path (default: ~/.gemini/config/mcp_config.json)
+  -b, --bin-dir <DIR>          Directory to install binaries (default: ~/.local/bin)
+      --install-deps           Automatically install missing dependencies (Node.js/gcloud)
+      --login-gcloud           Prompt/run Google Cloud authentication
+      --gcloud-account <EMAIL> Google Cloud account email to log in
+      --gcloud-project <ID>    Google Cloud project ID to set as default
+      --skip-gcloud            Skip Google Cloud MCP setup
+      --skip-github            Skip GitHub MCP setup
+      --test                   Run in CI / Test mode (uses mock credentials, non-interactive)
+  -h, --help                   Show this help message
 EOF
 }
 
@@ -44,6 +52,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         -b|--bin-dir)
             BIN_DIR="$2"
+            shift 2
+            ;;
+        --install-deps)
+            INSTALL_DEPS=true
+            shift
+            ;;
+        --login-gcloud)
+            LOGIN_GCLOUD=true
+            shift
+            ;;
+        --gcloud-account)
+            GCLOUD_ACCOUNT="$2"
+            shift 2
+            ;;
+        --gcloud-project)
+            GCLOUD_PROJECT="$2"
             shift 2
             ;;
         --skip-gcloud)
@@ -147,26 +171,131 @@ fi
 if [ "$SKIP_GCLOUD" = false ]; then
     echo "[-] Checking Google Cloud MCP prerequisites..."
 
+    # Check Node.js
     if ! command -v node >/dev/null 2>&1; then
         echo "    Warning: Node.js is not installed. Node >= 20 is required for @google-cloud/gcloud-mcp."
+        if [ "$INSTALL_DEPS" = true ] || { [ "$IS_TEST" = false ] && [ -t 0 ]; }; then
+            DO_INSTALL_NODE="n"
+            if [ "$INSTALL_DEPS" = true ]; then
+                DO_INSTALL_NODE="y"
+            else
+                read -r -p "    Would you like to install Node.js via nvm / package manager? [y/N]: " DO_INSTALL_NODE
+            fi
+            if [[ "$DO_INSTALL_NODE" =~ ^[Yy]$ ]]; then
+                echo "    Installing Node.js..."
+                curl -fsSL https://deb.nodesource.com/setup_20.x 2>/dev/null | bash - 2>/dev/null || true
+            fi
+        fi
     else
         NODE_VER="$(node -v)"
         echo "    ✓ Node.js detected: ${NODE_VER}"
     fi
 
+    # Install @google-cloud/gcloud-mcp package globally if npm is present
+    if command -v npm >/dev/null 2>&1; then
+        if [ "$INSTALL_DEPS" = true ] || { [ "$IS_TEST" = false ] && [ -t 0 ]; }; then
+            echo "    Ensuring @google-cloud/gcloud-mcp is installed..."
+            npm install -g --prefix "$HOME/.local" @google-cloud/gcloud-mcp >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Check gcloud CLI
     if ! command -v gcloud >/dev/null 2>&1; then
         echo "    Warning: gcloud CLI is not detected in PATH."
-        echo "    Install it via: curl -sSL https://sdk.cloud.google.com | bash"
-    else
+        DO_INSTALL_GCLOUD="n"
+        if [ "$INSTALL_DEPS" = true ]; then
+            DO_INSTALL_GCLOUD="y"
+        elif [ "$IS_TEST" = false ] && [ -t 0 ]; then
+            read -r -p "    Would you like to download and install Google Cloud SDK now? [y/N]: " DO_INSTALL_GCLOUD
+        fi
+
+        if [[ "$DO_INSTALL_GCLOUD" =~ ^[Yy]$ ]]; then
+            echo "    Downloading and installing Google Cloud SDK..."
+            curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts --install-dir="$HOME"
+            if [ -f "$HOME/google-cloud-sdk/bin/gcloud" ]; then
+                ln -sf "$HOME/google-cloud-sdk/bin/gcloud" "${BIN_DIR}/gcloud"
+                ln -sf "$HOME/google-cloud-sdk/bin/gsutil" "${BIN_DIR}/gsutil"
+                ln -sf "$HOME/google-cloud-sdk/bin/bq" "${BIN_DIR}/bq"
+                export PATH="${BIN_DIR}:$HOME/google-cloud-sdk/bin:$PATH"
+                echo "    ✓ Google Cloud SDK installed and linked to ${BIN_DIR}/gcloud"
+            fi
+        else
+            echo "    Install it manually via: curl -sSL https://sdk.cloud.google.com | bash"
+        fi
+    fi
+
+    # Verify gcloud if available and handle authentication
+    if command -v gcloud >/dev/null 2>&1; then
         GCLOUD_VER="$(gcloud --version 2>&1 | head -n 1)"
         echo "    ✓ Google Cloud SDK detected: ${GCLOUD_VER}"
-        
-        # Check active account
+
         ACTIVE_ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
         if [ -n "$ACTIVE_ACCOUNT" ] && [ "$ACTIVE_ACCOUNT" != "(unset)" ]; then
             echo "    ✓ Active gcloud account: ${ACTIVE_ACCOUNT}"
         else
-            echo "    [Notice] No active account logged in. Run 'gcloud auth login' to authenticate."
+            ACTIVE_ACCOUNT=""
+            echo "    [Notice] No active account logged in."
+        fi
+
+        # Interactive authentication option with browser link
+        if [ "$IS_TEST" = false ]; then
+            DO_LOGIN=false
+            if [ "$LOGIN_GCLOUD" = true ] || [ -z "$ACTIVE_ACCOUNT" ]; then
+                if [ "$LOGIN_GCLOUD" = true ]; then
+                    DO_LOGIN=true
+                elif [ -t 0 ]; then
+                    read -r -p "    Would you like to authenticate Google Cloud now? [y/N]: " USER_WANTS_LOGIN
+                    if [[ "$USER_WANTS_LOGIN" =~ ^[Yy]$ ]]; then
+                        DO_LOGIN=true
+                    fi
+                fi
+            fi
+
+            if [ "$DO_LOGIN" = true ]; then
+                echo ""
+                echo "----------------------------------------------------------"
+                echo " Google Cloud Authentication "
+                echo "----------------------------------------------------------"
+                echo " Select login mode:"
+                echo "   [1] Show URL link to copy-paste into your browser (Recommended for remote/headless)"
+                echo "   [2] Launch web browser automatically"
+                echo -n " Choice [1/2] (default: 1): "
+                AUTH_CHOICE="1"
+                if [ -t 0 ]; then
+                    read -r AUTH_CHOICE_INPUT
+                    if [ -n "$AUTH_CHOICE_INPUT" ]; then
+                        AUTH_CHOICE="$AUTH_CHOICE_INPUT"
+                    fi
+                fi
+
+                AUTH_CMD=(gcloud auth login)
+                if [ -n "$GCLOUD_ACCOUNT" ]; then
+                    AUTH_CMD+=("$GCLOUD_ACCOUNT")
+                fi
+
+                if [ "$AUTH_CHOICE" = "1" ]; then
+                    echo "    Generating browser login link..."
+                    AUTH_CMD+=(--no-launch-browser)
+                else
+                    echo "    Opening browser for authorization..."
+                fi
+
+                "${AUTH_CMD[@]}" || {
+                    echo "    Warning: Authentication process was cancelled or failed."
+                }
+
+                # Refresh active account
+                ACTIVE_ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
+                if [ -n "$ACTIVE_ACCOUNT" ] && [ "$ACTIVE_ACCOUNT" != "(unset)" ]; then
+                    echo "    ✓ Successfully logged in as: ${ACTIVE_ACCOUNT}"
+                fi
+            fi
+
+            # Configure default project if specified
+            if [ -n "$GCLOUD_PROJECT" ]; then
+                echo "    Setting default Google Cloud project to: ${GCLOUD_PROJECT}"
+                gcloud config set project "$GCLOUD_PROJECT" 2>/dev/null || true
+            fi
         fi
     fi
 fi
@@ -176,7 +305,6 @@ fi
 # ------------------------------------------------------------------------------
 echo "[-] Updating MCP configuration at: ${CONFIG_PATH}"
 
-# Python or Node-based safe JSON merger to prevent corrupting existing configs
 export PY_CONFIG_PATH="$CONFIG_PATH"
 export PY_GITHUB_TOKEN="$GITHUB_TOKEN"
 export PY_SKIP_GITHUB="$SKIP_GITHUB"
@@ -200,7 +328,6 @@ if os.path.exists(config_path):
             if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
                 data["mcpServers"] = {}
     except Exception as e:
-        print(f"    Warning: Existing config could not be parsed ({e}), initializing fresh config.")
         data = {"mcpServers": {}}
 
 if not skip_github and github_token:
@@ -266,7 +393,6 @@ else
     exit 1
 fi
 
-# Set restrictive permissions on config file to protect credentials
 chmod 600 "$CONFIG_PATH"
 echo "    ✓ Permissions secured (chmod 600)"
 echo "    ✓ Configuration saved successfully."

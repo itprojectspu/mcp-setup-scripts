@@ -4,8 +4,9 @@
     Configures GitHub MCP Server and Google Cloud MCP Server.
 
 .DESCRIPTION
-    Downloads official github-mcp-server binary for Windows, checks Google Cloud
-    and Node.js prerequisites, and securely configures mcp_config.json.
+    Downloads official github-mcp-server binary for Windows, checks and optionally installs
+    Google Cloud and Node.js prerequisites, assists with browser-based authentication,
+    and securely configures mcp_config.json.
 
 .PARAMETER GitHubToken
     GitHub Personal Access Token (classic or fine-grained with repo/read:org permissions).
@@ -16,6 +17,18 @@
 
 .PARAMETER InstallDir
     Directory to place server binaries. Defaults to "$env:LOCALAPPDATA\Programs\mcp-servers".
+
+.PARAMETER GCloudAccount
+    Google Cloud account email to log in (e.g., user@domain.com).
+
+.PARAMETER GCloudProject
+    Google Cloud project ID to set as default.
+
+.PARAMETER InstallDependencies
+    Automatically download and install missing prerequisites (Node.js / Google Cloud SDK).
+
+.PARAMETER LoginGCloud
+    Prompt or launch Google Cloud authentication with browser link.
 
 .PARAMETER SkipGCloud
     Skip Google Cloud MCP setup.
@@ -29,7 +42,7 @@
 .EXAMPLE
     .\setup-mcp.ps1
 .EXAMPLE
-    .\setup-mcp.ps1 -GitHubToken "ghp_xxxxxxxxxxxx"
+    .\setup-mcp.ps1 -GitHubToken "ghp_xxxxxxxxxxxx" -LoginGCloud -GCloudAccount "user@domain.com"
 #>
 
 [CmdletBinding()]
@@ -37,6 +50,10 @@ param(
     [string]$GitHubToken = $env:GITHUB_PERSONAL_ACCESS_TOKEN,
     [string]$ConfigPath = "$env:USERPROFILE\.gemini\config\mcp_config.json",
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\mcp-servers",
+    [string]$GCloudAccount,
+    [string]$GCloudProject,
+    [switch]$InstallDependencies,
+    [switch]$LoginGCloud,
     [switch]$SkipGCloud,
     [switch]$SkipGitHub,
     [switch]$Test
@@ -135,18 +152,82 @@ if (-not $SkipGitHub) {
 if (-not $SkipGCloud) {
     Write-Host "[-] Checking Google Cloud MCP prerequisites..." -ForegroundColor Yellow
 
+    # Check Node.js
     $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
     if (-not $nodeCmd) {
         Write-Warning "    Node.js is not detected in PATH. Node >= 20 is required for @google-cloud/gcloud-mcp."
+        $doInstallNode = $false
+        if ($InstallDependencies) {
+            $doInstallNode = $true
+        } elseif (-not $Test -and [System.Environment]::UserInteractive) {
+            $nodeAnswer = Read-Host "    Would you like to install Node.js via winget now? (Y/N)"
+            if ($nodeAnswer -match "^[Yy]") {
+                $doInstallNode = $true
+            }
+        }
+
+        if ($doInstallNode) {
+            $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+            if ($wingetCmd) {
+                Write-Host "    Installing Node.js via winget..." -ForegroundColor Gray
+                winget install --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+            } else {
+                Write-Warning "    winget is not available. Please install Node.js manually: https://nodejs.org/"
+            }
+        }
     } else {
         $nodeVer = & node -v
         Write-Host "    [OK] Node.js detected: $nodeVer" -ForegroundColor Green
     }
 
+    # Check gcloud CLI
     $gcloudCmd = Get-Command gcloud -ErrorAction SilentlyContinue
     if (-not $gcloudCmd) {
-        Write-Warning "    gcloud CLI is not detected in PATH. Install Google Cloud SDK for Windows: https://cloud.google.com/sdk/docs/install"
-    } else {
+        Write-Warning "    gcloud CLI is not detected in PATH."
+        $doInstallGcloud = $false
+        if ($InstallDependencies) {
+            $doInstallGcloud = $true
+        } elseif (-not $Test -and [System.Environment]::UserInteractive) {
+            $gcloudAnswer = Read-Host "    Would you like to download and install Google Cloud SDK now? (Y/N)"
+            if ($gcloudAnswer -match "^[Yy]") {
+                $doInstallGcloud = $true
+            }
+        }
+
+        if ($doInstallGcloud) {
+            $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+            $installedViaWinget = $false
+            if ($wingetCmd) {
+                try {
+                    Write-Host "    Installing Google Cloud SDK via winget..." -ForegroundColor Gray
+                    winget install --id Google.CloudSDK --accept-package-agreements --accept-source-agreements
+                    $installedViaWinget = $true
+                } catch {
+                    Write-Warning "    winget install failed, trying direct installer..."
+                }
+            }
+
+            if (-not $installedViaWinget) {
+                $gcloudInstallerUrl = "https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe"
+                $gcloudInstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) "GoogleCloudSDKInstaller.exe"
+                Write-Host "    Downloading Google Cloud SDK installer..." -ForegroundColor Gray
+                Invoke-WebRequest -Uri $gcloudInstallerUrl -OutFile $gcloudInstallerPath -UseBasicParsing
+                Write-Host "    Launching installer. Complete the setup wizard..." -ForegroundColor Cyan
+                Start-Process -FilePath $gcloudInstallerPath -Wait
+            }
+
+            # Refresh PATH from registry
+            $regUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+            $regMachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            $env:PATH = "$regUserPath;$regMachinePath;$env:PATH"
+            $gcloudCmd = Get-Command gcloud -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "    You can install it manually from: https://cloud.google.com/sdk/docs/install" -ForegroundColor Gray
+        }
+    }
+
+    # If gcloud is available, check status and handle browser authentication
+    if ($gcloudCmd) {
         $gcloudVer = (& gcloud --version 2>&1 | Select-Object -First 1)
         Write-Host "    [OK] Google Cloud SDK detected: $gcloudVer" -ForegroundColor Green
 
@@ -160,7 +241,75 @@ if (-not $SkipGCloud) {
         if ($activeAccount -and $activeAccount -ne "(unset)") {
             Write-Host "    [OK] Active gcloud account: $activeAccount" -ForegroundColor Green
         } else {
-            Write-Host "    [Notice] No active account logged in. Run 'gcloud auth login' to authenticate." -ForegroundColor Cyan
+            $activeAccount = $null
+            Write-Host "    [Notice] No active account logged in." -ForegroundColor Cyan
+        }
+
+        # Interactive authentication with browser link option
+        if (-not $Test) {
+            $doLogin = $false
+            if ($LoginGCloud -or -not $activeAccount) {
+                if ($LoginGCloud) {
+                    $doLogin = $true
+                } elseif ([System.Environment]::UserInteractive) {
+                    $loginAnswer = Read-Host "    Would you like to authenticate Google Cloud now? (Y/N)"
+                    if ($loginAnswer -match "^[Yy]") {
+                        $doLogin = $true
+                    }
+                }
+            }
+
+            if ($doLogin) {
+                Write-Host ""
+                Write-Host "----------------------------------------------------------" -ForegroundColor Cyan
+                Write-Host " Google Cloud Authentication " -ForegroundColor Cyan
+                Write-Host "----------------------------------------------------------" -ForegroundColor Cyan
+                Write-Host " Select login mode:"
+                Write-Host "   [1] Show URL link to copy-paste into your browser (Recommended for remote/headless)"
+                Write-Host "   [2] Launch web browser automatically"
+                $authChoice = Read-Host " Choice [1/2] (default: 1)"
+                if ([string]::IsNullOrWhiteSpace($authChoice)) {
+                    $authChoice = "1"
+                }
+
+                $authArgs = @("auth", "login")
+                if ($GCloudAccount) {
+                    $authArgs += $GCloudAccount
+                }
+
+                if ($authChoice -eq "1") {
+                    Write-Host "    Generating browser login link..." -ForegroundColor Cyan
+                    $authArgs += "--no-launch-browser"
+                } else {
+                    Write-Host "    Opening browser for authorization..." -ForegroundColor Cyan
+                }
+
+                try {
+                    & gcloud @authArgs
+                } catch {
+                    Write-Warning "    Authentication process encountered an issue: $($_.Exception.Message)"
+                }
+
+                # Verify new active account
+                try {
+                    $activeAccount = (& gcloud config get-value account 2>$null)
+                    if ($activeAccount -and $activeAccount -ne "(unset)") {
+                        Write-Host "    [OK] Successfully logged in as: $activeAccount" -ForegroundColor Green
+                    }
+                } catch {
+                    # Ignore
+                }
+            }
+
+            # Configure default project if supplied
+            if ($GCloudProject) {
+                Write-Host "    Setting default Google Cloud project to: $GCloudProject" -ForegroundColor Gray
+                try {
+                    & gcloud config set project $GCloudProject
+                } catch {
+                    Write-Warning "    Failed to set project $GCloudProject"
+                }
+            }
         }
     }
 }

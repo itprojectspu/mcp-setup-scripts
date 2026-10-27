@@ -4,7 +4,7 @@ Cross-platform configuration scripts for Model Context Protocol (MCP) servers:
 - **GitHub MCP Server** (`github-mcp-server` official Go binary)
 - **Google Cloud MCP Server** (`@google-cloud/gcloud-mcp`)
 
-Includes automated CI workflows to test configuration and ensure **zero secrets** are committed.
+Includes automated dependency installation, browser-based authentication with clickable/copyable URLs, and GitHub Actions CI.
 
 ---
 
@@ -20,85 +20,71 @@ Includes automated CI workflows to test configuration and ensure **zero secrets*
 
 ---
 
-## 📋 Prerequisites
+## 📋 Prerequisites & Automatic Installation
 
-| Component | Linux | Windows |
-| :--- | :--- | :--- |
-| **Node.js** | `>= 20.x` | `>= 20.x` |
-| **Python** | `>= 3.8` (for JSON merge) | Not required |
-| **Shell** | `bash`, `curl`, `tar` | PowerShell 5.1+ / PowerShell 7+ |
-| **Google Cloud CLI** | Recommended (`gcloud`) | Recommended (`gcloud`) |
+The scripts can automatically detect and offer to install missing tools:
+- **Node.js** (`>= 20.x`)
+- **Google Cloud SDK** (`gcloud`)
+- **GitHub MCP Server** (downloaded from official GitHub releases)
 
 ---
 
 ## 🚀 Quick Start
 
-### Linux & macOS
-
-1. Make the script executable:
-   ```bash
-   chmod +x scripts/setup-mcp.sh
-   ```
-
-2. Run interactively (you will be prompted to enter your GitHub PAT securely):
-   ```bash
-   ./scripts/setup-mcp.sh
-   ```
-
-3. Or pass your token via environment variable:
-   ```bash
-   export GITHUB_PERSONAL_ACCESS_TOKEN="ghp_yourTokenHere"
-   ./scripts/setup-mcp.sh
-   ```
-
-#### Options
-
-```
-Usage: setup-mcp.sh [OPTIONS]
-
-Options:
-  -t, --token <TOKEN>      GitHub Personal Access Token
-  -c, --config <PATH>      Target mcp_config.json path (default: ~/.gemini/config/mcp_config.json)
-  -b, --bin-dir <DIR>      Directory to install binaries (default: ~/.local/bin)
-      --skip-gcloud        Skip Google Cloud MCP setup
-      --skip-github        Skip GitHub MCP setup
-      --test               Run in CI / Test mode with mock credentials
-  -h, --help               Show help message
-```
-
----
-
 ### Windows (PowerShell)
 
-1. Open PowerShell and navigate to the repository directory.
+1. Open PowerShell and navigate to the project directory:
+   ```powershell
+   cd \ruta\a\mcp-setup-scripts
+   ```
+
 2. Run interactively:
    ```powershell
    .\scripts\setup-mcp.ps1
    ```
 
-3. Or pass your token as a parameter or via environment variable:
+3. **Con instalación automática de dependencias y autenticación de Google Cloud:**
    ```powershell
-   $env:GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_yourTokenHere"
-   .\scripts\setup-mcp.ps1
+   .\scripts\setup-mcp.ps1 `
+       -InstallDependencies `
+       -LoginGCloud `
+       -GCloudAccount "tu-usuario@tudominio.com" `
+       -GCloudProject "tu-proyecto-id"
    ```
 
-#### Parameters
-
-```powershell
-.\scripts\setup-mcp.ps1 `
-    -GitHubToken "ghp_yourTokenHere" `
-    -ConfigPath "$env:USERPROFILE\.gemini\config\mcp_config.json" `
-    -InstallDir "$env:LOCALAPPDATA\Programs\mcp-servers" `
-    -SkipGCloud `
-    -SkipGitHub `
-    -Test
-```
+#### Opciones de Autenticación de Google Cloud en Windows
+El script te preguntará cómo deseas autenticarte:
+- **Opción 1 (Recomendada):** Muestra un **enlace URL** para copiar y pegar en tu navegador. Ideal si trabajas por SSH, máquina virtual o terminal remota. Al iniciar sesión, copias el código de autorización generado y lo pegas en la consola.
+- **Opción 2:** Abre el navegador automáticamente para completar el inicio de sesión.
 
 ---
 
-## 📄 Generated Configuration Format
+### Linux & macOS (Bash)
 
-The scripts generate or safely merge into `mcp_config.json`:
+1. Dar permisos de ejecución:
+   ```bash
+   chmod +x scripts/setup-mcp.sh
+   ```
+
+2. Ejecutar de forma interactiva:
+   ```bash
+   ./scripts/setup-mcp.sh
+   ```
+
+3. **Con instalación de dependencias y login:**
+   ```bash
+   ./scripts/setup-mcp.sh \
+       --install-deps \
+       --login-gcloud \
+       --gcloud-account "tu-usuario@tudominio.com" \
+       --gcloud-project "tu-proyecto-id"
+   ```
+
+---
+
+## 📄 Formato del Archivo Generado
+
+Los scripts generan o combinan de forma segura el archivo `mcp_config.json`:
 
 ```json
 {
@@ -122,32 +108,10 @@ The scripts generate or safely merge into `mcp_config.json`:
 
 ## 🧪 Continuous Integration (CI)
 
-This repository includes a multi-platform GitHub Actions workflow (`.github/workflows/ci.yml`):
-
-1. **Security & Lint**:
-   - Secret scan to verify no private keys or tokens are in code or git history.
-   - Verifies forbidden files are not tracked.
-   - Shell syntax verification (`bash -n`).
-2. **Linux Runner (`ubuntu-latest`)**:
-   - Executes `tests/test-linux.sh`.
-   - Tests binary downloads, config generation, and permission enforcement (`chmod 600`).
-3. **Windows Runner (`windows-latest`)**:
-   - Executes `tests/test-windows.ps1` via PowerShell (`pwsh`).
-   - Tests Windows archive extraction and JSON validation.
-
----
-
-## 🔑 Google Cloud Authentication
-
-After configuring the MCP, authenticate your Google Cloud account:
-
-```bash
-# Login with your account
-gcloud auth login your-email@your-domain.com
-
-# Set default project
-gcloud config set project your-gcp-project-id
-```
+El repositorio incluye un workflow de GitHub Actions (`.github/workflows/ci.yml`):
+- **Windows:** Valida compatibilidad nativa con **Windows PowerShell 5.1** y **PowerShell Core 7**.
+- **Linux:** Valida instalación, permisos `chmod 600` y esquemas JSON en Ubuntu.
+- **Seguridad:** Analiza que no existan credenciales ni archivos `.env` en el repositorio.
 
 ---
 
